@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const transactions_controller_1 = require("./transactions.controller");
+const async_handler_1 = require("../../common/async.handler");
+const router = (0, express_1.Router)();
+router.get('/', (0, async_handler_1.asyncHandler)(transactions_controller_1.TransactionsController.getTransactions));
+router.get('/latest', (0, async_handler_1.asyncHandler)(transactions_controller_1.TransactionsController.getLatestTransaction));
+router.get('/:id', (0, async_handler_1.asyncHandler)(transactions_controller_1.TransactionsController.getTransactionById));
+router.post('/', (0, async_handler_1.asyncHandler)(transactions_controller_1.TransactionsController.createTransaction));
+router.post('/delete_latest', (0, async_handler_1.asyncHandler)(transactions_controller_1.TransactionsController.deleteLatest));
+exports.default = router;
