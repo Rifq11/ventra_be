@@ -165,7 +165,7 @@ export const TransactionsService = {
 
                 await tx
                     .update(ventraProdukDetail)
-                    .set({ stock: sql`${ventraProdukDetail.stock} - ${item.jumlah}` })
+                    .set({ stock: sisaStok })
                     .where(eq(ventraProdukDetail.kodeBrg, item.kode_barang));
 
                 await tx.insert(ventraDetailTransaksi).values({

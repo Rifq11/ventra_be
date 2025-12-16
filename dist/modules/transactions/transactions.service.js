@@ -120,7 +120,7 @@ exports.TransactionsService = {
                 const sisaStok = stokSebelum - item.jumlah;
                 await tx
                     .update(schema_1.ventraProdukDetail)
-                    .set({ stock: (0, drizzle_orm_1.sql) `${schema_1.ventraProdukDetail.stock} - ${item.jumlah}` })
+                    .set({ stock: sisaStok })
                     .where((0, drizzle_orm_1.eq)(schema_1.ventraProdukDetail.kodeBrg, item.kode_barang));
                 await tx.insert(schema_1.ventraDetailTransaksi).values({
                     idTransaksi: String(nextId),
