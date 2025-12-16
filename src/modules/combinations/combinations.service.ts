@@ -1,6 +1,6 @@
-import pool from '../../config/db';
-import { RowDataPacket } from 'mysql2';
-import * as fs from 'fs';
+import db from '../../config/drizzle';
+import { ventraProdukDetail } from '../../drizzle/schema';
+import { eq } from 'drizzle-orm';
 import * as path from 'path';
 
 export interface CombinationItem {
@@ -10,52 +10,32 @@ export interface CombinationItem {
 }
 
 export const CombinationsService = {
-    async getCombinationsByProductId(produkId: number): Promise<CombinationItem[]> {
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT ukuran, pattern, Kode_Brg 
-             FROM ventra_produk_detail 
-             WHERE produk_id = ?`,
-            [produkId]
-        );
+    extractPatternFilename(pattern: string | null): string | null {
+        if (!pattern) return null;
+        
+        if (pattern.includes('/')) {
+            const parts = pattern.split('/');
+            return parts[parts.length - 1];
+        }
+        
+        return pattern;
+    },
 
-        const baseUrl =
-            process.env.BASE_URL || 'https://backend24.site/Rian/XI/recode/Ventra';
-        const patternFolder = path.join(
-            __dirname,
-            '../../../public/uploads/patterns/'
-        );
+    async getCombinationsByProductId(produkId: number): Promise<CombinationItem[]> {
+        const rows = await db
+            .select({
+                ukuran: ventraProdukDetail.ukuran,
+                pattern: ventraProdukDetail.pattern,
+                Kode_Brg: ventraProdukDetail.kodeBrg,
+            })
+            .from(ventraProdukDetail)
+            .where(eq(ventraProdukDetail.produkId, produkId));
 
         return rows.map(row => {
-            const kode: string = row.Kode_Brg;
-            let patternUrl: string | null = null;
-
-            if (row.pattern) {
-                const pattern: string = row.pattern;
-                if (pattern.startsWith('http')) {
-                    patternUrl = pattern;
-                } else {
-                    patternUrl = `${baseUrl}/uploads/patterns/${pattern}`;
-                }
-            } else {
-                try {
-                    const files = fs.readdirSync(patternFolder);
-                    const matchedFile = files.find(
-                        file =>
-                            file.includes(kode) &&
-                            (file.endsWith('.jpg') || file.endsWith('.png'))
-                    );
-                    if (matchedFile) {
-                        patternUrl = `${baseUrl}/uploads/patterns/${matchedFile}`;
-                    }
-                } catch {
-                    patternUrl = null;
-                }
-            }
-
             return {
-                ukuran: row.ukuran,
+                ukuran: row.ukuran || '',
                 Kode_Brg: row.Kode_Brg,
-                pattern: patternUrl
+                pattern: this.extractPatternFilename(row.pattern)
             };
         });
     },
@@ -68,40 +48,35 @@ export const CombinationsService = {
         originalFileName: string;
         buffer: Buffer;
     }) {
-        const uploadDir = path.join(
-            __dirname,
-            '../../../public/uploads/patterns/'
-        );
+        // Kode lama untuk menyimpan file ke filesystem - tidak digunakan lagi karena pakai BLOB dari DB
+        // const uploadDir = path.join(
+        //     __dirname,
+        //     '../../../public/uploads/patterns/'
+        // );
+        // if (!fs.existsSync(uploadDir)) {
+        //     fs.mkdirSync(uploadDir, { recursive: true });
+        // }
+        // const fileExtension = path.extname(params.originalFileName);
+        // const baseName = path.basename(params.originalFileName, fileExtension);
+        // const patternFileName = `${params.kode_brg}.${baseName}${fileExtension}`;
+        // const targetPath = path.join(uploadDir, patternFileName);
+        // fs.writeFileSync(targetPath, params.buffer);
 
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
+        // Simpan hanya filename ke database (pattern sekarang disimpan sebagai BLOB di tabel lain)
+        const fileExtension = path.extname(params.originalFileName);
+        const baseName = path.basename(params.originalFileName, fileExtension);
+        const patternFileName = `${params.kode_brg}.${baseName}${fileExtension}`;
 
-        const uniqueName = `${Date.now()}_${Math.random()
-            .toString(36)
-            .substring(2, 8)}_${params.originalFileName}`;
-        const targetPath = path.join(uploadDir, uniqueName);
-
-        fs.writeFileSync(targetPath, params.buffer);
-
-        const baseUrl =
-            process.env.BASE_URL || 'https://backend24.site/Rian/XI/recode/Ventra';
-        const patternUrl = `${baseUrl}/uploads/patterns/${uniqueName}`;
-
-        await pool.query(
-            `INSERT INTO ventra_produk_detail (produk_id, ukuran, pattern, Kode_Brg, stock)
-             VALUES (?, ?, ?, ?, ?)`,
-            [
-                params.produk_id,
-                params.ukuran,
-                patternUrl,
-                params.kode_brg,
-                params.stock
-            ]
-        );
+        await db.insert(ventraProdukDetail).values({
+            produkId: params.produk_id,
+            ukuran: params.ukuran,
+            pattern: patternFileName,
+            kodeBrg: params.kode_brg,
+            stock: params.stock,
+        });
 
         return {
-            pattern_url: patternUrl,
+            pattern: patternFileName,
             produk_id: params.produk_id,
             ukuran: params.ukuran,
             kode_brg: params.kode_brg,
@@ -109,5 +84,3 @@ export const CombinationsService = {
         };
     }
 };
-
-

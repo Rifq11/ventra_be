@@ -11,4 +11,6 @@ const pool = mysql.createPool({
 
 export const db = drizzle(pool, { schema, mode: 'default' });
 
-export default pool;
+export default db;
+
+

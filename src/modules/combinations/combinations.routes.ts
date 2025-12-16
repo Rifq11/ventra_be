@@ -6,7 +6,7 @@ import { CombinationsController } from './combinations.controller';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-router.get('/', asyncHandler(CombinationsController.getByProductId));
+router.get('/:produk_id', asyncHandler(CombinationsController.getByProductId));
 router.post(
     '/',
     upload.single('pattern'),

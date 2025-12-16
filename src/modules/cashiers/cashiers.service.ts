@@ -1,54 +1,68 @@
-import pool from '../../config/db';
-import { RowDataPacket } from 'mysql2';
+import db from '../../config/drizzle';
+import { ventraKasir } from '../../drizzle/schema';
+import { eq, sql, and, gte, lte, asc } from 'drizzle-orm';
 
 export const CashiersService = {
     async getAllCashiers() {
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT 
-                kode_kasir,
-                Nama,
-                WaktuAktif,
-                WaktuNonAktif
-            FROM ventra_kasir
-            ORDER BY kode_kasir`
-        );
+        const rows = await db
+            .select({
+                kode_kasir: ventraKasir.kodeKasir,
+                Nama: ventraKasir.nama,
+                WaktuAktif: ventraKasir.waktuAktif,
+                WaktuNonAktif: ventraKasir.waktuNonAktif,
+            })
+            .from(ventraKasir)
+            .orderBy(asc(ventraKasir.kodeKasir));
 
-        return rows;
+        return rows.map(row => ({
+            Nama: row.Nama,
+            WaktuAktif: row.WaktuAktif,
+            WaktuNonAktif: row.WaktuNonAktif
+        }));
     },
 
     async getActiveCashiers() {
         const today = new Date().toISOString().split('T')[0];
 
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT 
-                kode_kasir,
-                Nama,
-                WaktuAktif,
-                WaktuNonAktif
-            FROM ventra_kasir
-            WHERE ? BETWEEN WaktuAktif AND WaktuNonAktif
-            ORDER BY kode_kasir`,
-            [today]
-        );
+        const rows = await db
+            .select({
+                kode_kasir: ventraKasir.kodeKasir,
+                Nama: ventraKasir.nama,
+                WaktuAktif: ventraKasir.waktuAktif,
+                WaktuNonAktif: ventraKasir.waktuNonAktif,
+            })
+            .from(ventraKasir)
+            .where(
+                sql`${sql.raw(`'${today}'`)} BETWEEN ${ventraKasir.waktuAktif} AND ${ventraKasir.waktuNonAktif}`
+            )
+            .orderBy(asc(ventraKasir.kodeKasir));
 
-        return rows;
+        return rows.map(row => ({
+            Nama: row.Nama,
+            WaktuAktif: row.WaktuAktif,
+            WaktuNonAktif: row.WaktuNonAktif
+        }));
     },
 
     async getCashierByKode(kode: number) {
-        const [rows] = await pool.query<RowDataPacket[]>(
-            `SELECT 
-                kode_kasir,
-                Nama,
-                WaktuAktif,
-                WaktuNonAktif
-            FROM ventra_kasir
-            WHERE kode_kasir = ?
-            LIMIT 1`,
-            [kode]
-        );
+        const rows = await db
+            .select({
+                kode_kasir: ventraKasir.kodeKasir,
+                Nama: ventraKasir.nama,
+                WaktuAktif: ventraKasir.waktuAktif,
+                WaktuNonAktif: ventraKasir.waktuNonAktif,
+            })
+            .from(ventraKasir)
+            .where(eq(ventraKasir.kodeKasir, kode))
+            .limit(1);
 
         if (rows.length === 0) return null;
 
-        return rows[0];
+        const row = rows[0];
+        return {
+            Nama: row.Nama,
+            WaktuAktif: row.WaktuAktif,
+            WaktuNonAktif: row.WaktuNonAktif
+        };
     }
 };

@@ -3,7 +3,6 @@ import { asyncHandler } from '../../common/async.handler';
 import { ProductsService } from './products.service';
 
 export const ProductsController = {
-    // GET /api/products?page=1&limit=20
     getProducts: asyncHandler(async (req: Request, res: Response) => {
         const page = Math.max(1, parseInt(req.query.page as string) || 1);
         const limit = parseInt(req.query.limit as string) || 20;
@@ -19,7 +18,6 @@ export const ProductsController = {
         });
     }),
 
-    // GET /api/products/:kode
     getProductByKode: asyncHandler(async (req: Request, res: Response) => {
         const kode = req.params.kode.trim();
         const data = await ProductsService.getProductByKode(kode);

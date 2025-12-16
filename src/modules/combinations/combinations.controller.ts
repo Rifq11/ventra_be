@@ -3,7 +3,7 @@ import { CombinationsService } from './combinations.service';
 
 export const CombinationsController = {
     async getByProductId(req: Request, res: Response) {
-        const produkId = parseInt(req.query.produk_id as string, 10);
+        const produkId = parseInt(req.params.produk_id as string, 10);
 
         if (!produkId || produkId <= 0) {
             return res.status(400).json({

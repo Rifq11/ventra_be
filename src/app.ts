@@ -13,7 +13,8 @@ app.use(cors());
 app.use(express.json());
 
 // Static files
-app.use('/ventra/api/uploads', express.static(path.join(__dirname, '../public/uploads')));
+// Static files untuk uploads - tidak digunakan lagi karena pakai BLOB dari DB
+// app.use('/api/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 // Routes
 import productsRoutes from './modules/products/products.routes';
@@ -21,10 +22,10 @@ import cashiersRoutes from './modules/cashiers/cashiers.routes';
 import transactionsRoutes from './modules/transactions/transactions.routes';
 import combinationsRoutes from './modules/combinations/combinations.routes';
 
-app.use('/ventra/api/products', productsRoutes);
-app.use('/ventra/api/cashiers', cashiersRoutes);
-app.use('/ventra/api/transactions', transactionsRoutes);
-app.use('/ventra/api/combinations', combinationsRoutes);
+app.use('/api/products', productsRoutes);
+app.use('/api/cashiers', cashiersRoutes);
+app.use('/api/transactions', transactionsRoutes);
+app.use('/api/combinations', combinationsRoutes);
 
 // Error handler
 app.use(errorHandler);

@@ -21,7 +21,6 @@ export const TransactionsController = {
         });
     },
 
-    // PHP-style GET /transactions/:id
     async getTransactionById(req: Request, res: Response) {
         const id = parseInt(req.params.id, 10);
 
@@ -44,13 +43,11 @@ export const TransactionsController = {
         res.json(rows);
     },
 
-    // PHP-style GET /transactions/latest
     async getLatestTransaction(req: Request, res: Response) {
         const rows = await TransactionsService.getLatestTransaction();
         res.json(rows);
     },
 
-    // PHP-style POST /transactions
     async createTransaction(req: Request, res: Response) {
         const body = req.body;
 
@@ -84,7 +81,6 @@ export const TransactionsController = {
         });
     },
 
-    // PHP-style POST /transactions/delete-latest
     async deleteLatest(req: Request, res: Response) {
         const result = await TransactionsService.deleteLatestTransaction();
 
