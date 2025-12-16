@@ -119,15 +119,25 @@ exports.TransactionsService = {
                 // Use SELECT FOR UPDATE to lock row and prevent race condition
                 const [stockResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`, [item.kode_barang]);
                 const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
+                console.log(`[DEBUG] ${item.kode_barang}: Stock sebelum = ${stokSebelum}, Jumlah = ${item.jumlah}`);
                 if (stokSebelum < item.jumlah) {
                     throw new Error(`Stock tidak cukup untuk ${item.kode_barang}. Stock tersedia: ${stokSebelum}, dibutuhkan: ${item.jumlah}`);
                 }
                 const sisaStok = stokSebelum - item.jumlah;
-                // Update stock with WHERE condition to ensure atomic operation and prevent double update
-                const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = ? WHERE Kode_Brg = ? AND stock = ?`, [sisaStok, item.kode_barang, stokSebelum]);
+                // Update stock using atomic operation: stock = stock - jumlah
+                // This ensures that even if multiple requests come, only one will succeed
+                const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = stock - ? WHERE Kode_Brg = ? AND stock >= ?`, [item.jumlah, item.kode_barang, item.jumlah]);
+                console.log(`[DEBUG] ${item.kode_barang}: Update affectedRows = ${updateResult?.affectedRows}, changedRows = ${updateResult?.changedRows}`);
                 // Check if update was successful (affectedRows > 0)
                 if (!updateResult || updateResult.affectedRows === 0) {
-                    throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin sudah berubah oleh transaksi lain.`);
+                    throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`);
+                }
+                // Verify the final stock after update
+                const [verifyResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ?`, [item.kode_barang]);
+                const stockSetelah = verifyResult[0]?.stock ? Number(verifyResult[0].stock) : 0;
+                console.log(`[DEBUG] ${item.kode_barang}: Stock setelah = ${stockSetelah}, Expected = ${sisaStok}`);
+                if (stockSetelah !== sisaStok) {
+                    console.error(`[ERROR] ${item.kode_barang}: Stock mismatch! Expected ${sisaStok}, got ${stockSetelah}`);
                 }
                 // Insert detail transaction
                 await connection.query(`INSERT INTO ventra_detail_transaksi (id_transaksi, kode_barang, JMLH, harga, total_harga, sisa) VALUES (?, ?, ?, ?, ?, ?)`, [String(nextId), item.kode_barang, item.jumlah, item.harga, item.total_harga, sisaStok]);
