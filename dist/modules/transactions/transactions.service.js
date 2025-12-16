@@ -111,25 +111,33 @@ exports.TransactionsService = {
                     Number.isNaN(item.harga)) {
                     throw new Error(`Jumlah atau harga tidak valid pada item: ${item.kode_barang}`);
                 }
-                const stockResult = await tx
-                    .select({ stock: schema_1.ventraProdukDetail.stock })
-                    .from(schema_1.ventraProdukDetail)
-                    .where((0, drizzle_orm_1.eq)(schema_1.ventraProdukDetail.kodeBrg, item.kode_barang))
-                    .limit(1);
-                const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
+                // Use SELECT FOR UPDATE to lock row and prevent race condition
+                const stockResult = await tx.execute((0, drizzle_orm_1.sql) `SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ${item.kode_barang} FOR UPDATE`);
+                const stokSebelum = stockResult[0]?.[0]?.stock ? Number(stockResult[0][0].stock) : 0;
+                if (stokSebelum < item.jumlah) {
+                    throw new Error(`Stock tidak cukup untuk ${item.kode_barang}. Stock tersedia: ${stokSebelum}, dibutuhkan: ${item.jumlah}`);
+                }
                 const sisaStok = stokSebelum - item.jumlah;
                 await tx
                     .update(schema_1.ventraProdukDetail)
                     .set({ stock: sisaStok })
                     .where((0, drizzle_orm_1.eq)(schema_1.ventraProdukDetail.kodeBrg, item.kode_barang));
-                await tx.insert(schema_1.ventraDetailTransaksi).values({
-                    idTransaksi: String(nextId),
-                    kodeBarang: item.kode_barang,
-                    jumlah: item.jumlah,
-                    harga: item.harga,
-                    totalHarga: item.total_harga,
-                    sisa: sisaStok,
-                });
+                // Check if detail already exists to prevent duplicate insert
+                const existingDetail = await tx
+                    .select()
+                    .from(schema_1.ventraDetailTransaksi)
+                    .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ventraDetailTransaksi.idTransaksi, String(nextId)), (0, drizzle_orm_1.eq)(schema_1.ventraDetailTransaksi.kodeBarang, item.kode_barang)))
+                    .limit(1);
+                if (existingDetail.length === 0) {
+                    await tx.insert(schema_1.ventraDetailTransaksi).values({
+                        idTransaksi: String(nextId),
+                        kodeBarang: item.kode_barang,
+                        jumlah: item.jumlah,
+                        harga: item.harga,
+                        totalHarga: item.total_harga,
+                        sisa: sisaStok,
+                    });
+                }
             }
             return {
                 id: nextId
