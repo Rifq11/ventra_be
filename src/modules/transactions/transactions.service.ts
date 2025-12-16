@@ -1,4 +1,5 @@
 import db from '../../config/drizzle';
+import pool from '../../config/db';
 import { 
     ventraTransaksi, 
     ventraDetailTransaksi, 
@@ -128,21 +129,24 @@ export const TransactionsService = {
             throw new Error('Total must be numeric');
         }
 
-        return await db.transaction(async (tx) => {
+        // Use raw connection pool for better transaction control and SELECT FOR UPDATE
+        const connection = await pool.getConnection();
+        
+        try {
+            await connection.beginTransaction();
+
             const uangDibayar =
                 payload.uang_dibayar && !Number.isNaN(payload.uang_dibayar)
                     ? payload.uang_dibayar
                     : payload.total;
 
-            const [insertResult] = await tx.insert(ventraTransaksi).values({
-                total: payload.total,
-                payment: payload.payment,
-                kasir: payload.kasir,
-                uangDibayar: uangDibayar,
-                noRek: payload.no_rek || '',
-            });
+            // Insert transaction using raw query
+            const [insertResult] = await connection.query(
+                `INSERT INTO ventra_transaksi (Total, Payment, Kasir, uang_dibayar, no_rek) VALUES (?, ?, ?, ?, ?)`,
+                [payload.total, payload.payment, payload.kasir, uangDibayar, payload.no_rek || '']
+            ) as any;
 
-            const nextId = (insertResult as any).insertId;
+            const nextId = insertResult.insertId;
 
             for (const item of payload.detail) {
                 if (
@@ -155,16 +159,10 @@ export const TransactionsService = {
                 }
 
                 // Check if detail already exists to prevent duplicate processing
-                const existingDetail = await tx
-                    .select()
-                    .from(ventraDetailTransaksi)
-                    .where(
-                        and(
-                            eq(ventraDetailTransaksi.idTransaksi, String(nextId)),
-                            eq(ventraDetailTransaksi.kodeBarang, item.kode_barang)
-                        )
-                    )
-                    .limit(1);
+                const [existingDetail] = await connection.query(
+                    `SELECT * FROM ventra_detail_transaksi WHERE id_transaksi = ? AND kode_barang = ?`,
+                    [String(nextId), item.kode_barang]
+                ) as RowDataPacket[];
 
                 if (existingDetail.length > 0) {
                     // Skip if already processed (idempotency)
@@ -172,11 +170,12 @@ export const TransactionsService = {
                 }
 
                 // Use SELECT FOR UPDATE to lock row and prevent race condition
-                const stockResult = await tx.execute(
-                    sql`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ${item.kode_barang} FOR UPDATE`
-                ) as any;
+                const [stockResult] = await connection.query(
+                    `SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`,
+                    [item.kode_barang]
+                ) as RowDataPacket[];
 
-                const stokSebelum = stockResult[0]?.[0]?.stock ? Number(stockResult[0][0].stock) : 0;
+                const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
                 
                 if (stokSebelum < item.jumlah) {
                     throw new Error(
@@ -186,33 +185,37 @@ export const TransactionsService = {
 
                 const sisaStok = stokSebelum - item.jumlah;
 
-                // Update stock with WHERE condition to ensure atomic operation
-                const updateResult = await tx.execute(
-                    sql`UPDATE ventra_produk_detail SET stock = ${sisaStok} WHERE Kode_Brg = ${item.kode_barang} AND stock >= ${item.jumlah}`
+                // Update stock with WHERE condition to ensure atomic operation and prevent double update
+                const [updateResult] = await connection.query(
+                    `UPDATE ventra_produk_detail SET stock = ? WHERE Kode_Brg = ? AND stock = ?`,
+                    [sisaStok, item.kode_barang, stokSebelum]
                 ) as any;
 
                 // Check if update was successful (affectedRows > 0)
-                if (!updateResult || (updateResult[0]?.affectedRows ?? 0) === 0) {
+                if (!updateResult || updateResult.affectedRows === 0) {
                     throw new Error(
-                        `Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`
+                        `Gagal update stock untuk ${item.kode_barang}. Stock mungkin sudah berubah oleh transaksi lain.`
                     );
                 }
 
                 // Insert detail transaction
-                await tx.insert(ventraDetailTransaksi).values({
-                    idTransaksi: String(nextId),
-                    kodeBarang: item.kode_barang,
-                    jumlah: item.jumlah,
-                    harga: item.harga,
-                    totalHarga: item.total_harga,
-                    sisa: sisaStok,
-                });
+                await connection.query(
+                    `INSERT INTO ventra_detail_transaksi (id_transaksi, kode_barang, JMLH, harga, total_harga, sisa) VALUES (?, ?, ?, ?, ?, ?)`,
+                    [String(nextId), item.kode_barang, item.jumlah, item.harga, item.total_harga, sisaStok]
+                );
             }
+
+            await connection.commit();
 
             return {
                 id: nextId
             };
-        });
+        } catch (error) {
+            await connection.rollback();
+            throw error;
+        } finally {
+            connection.release();
+        }
     },
 
     async deleteLatestTransaction() {

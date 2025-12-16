@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TransactionsService = void 0;
 const drizzle_1 = __importDefault(require("../../config/drizzle"));
+const db_1 = __importDefault(require("../../config/db"));
 const schema_1 = require("../../drizzle/schema");
 const drizzle_orm_1 = require("drizzle-orm");
 exports.TransactionsService = {
@@ -94,17 +95,15 @@ exports.TransactionsService = {
         if (Number.isNaN(payload.total)) {
             throw new Error('Total must be numeric');
         }
-        return await drizzle_1.default.transaction(async (tx) => {
+        // Use raw connection pool for better transaction control and SELECT FOR UPDATE
+        const connection = await db_1.default.getConnection();
+        try {
+            await connection.beginTransaction();
             const uangDibayar = payload.uang_dibayar && !Number.isNaN(payload.uang_dibayar)
                 ? payload.uang_dibayar
                 : payload.total;
-            const [insertResult] = await tx.insert(schema_1.ventraTransaksi).values({
-                total: payload.total,
-                payment: payload.payment,
-                kasir: payload.kasir,
-                uangDibayar: uangDibayar,
-                noRek: payload.no_rek || '',
-            });
+            // Insert transaction using raw query
+            const [insertResult] = await connection.query(`INSERT INTO ventra_transaksi (Total, Payment, Kasir, uang_dibayar, no_rek) VALUES (?, ?, ?, ?, ?)`, [payload.total, payload.payment, payload.kasir, uangDibayar, payload.no_rek || '']);
             const nextId = insertResult.insertId;
             for (const item of payload.detail) {
                 if (Number.isNaN(item.jumlah) ||
@@ -112,42 +111,39 @@ exports.TransactionsService = {
                     throw new Error(`Jumlah atau harga tidak valid pada item: ${item.kode_barang}`);
                 }
                 // Check if detail already exists to prevent duplicate processing
-                const existingDetail = await tx
-                    .select()
-                    .from(schema_1.ventraDetailTransaksi)
-                    .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.ventraDetailTransaksi.idTransaksi, String(nextId)), (0, drizzle_orm_1.eq)(schema_1.ventraDetailTransaksi.kodeBarang, item.kode_barang)))
-                    .limit(1);
+                const [existingDetail] = await connection.query(`SELECT * FROM ventra_detail_transaksi WHERE id_transaksi = ? AND kode_barang = ?`, [String(nextId), item.kode_barang]);
                 if (existingDetail.length > 0) {
                     // Skip if already processed (idempotency)
                     continue;
                 }
                 // Use SELECT FOR UPDATE to lock row and prevent race condition
-                const stockResult = await tx.execute((0, drizzle_orm_1.sql) `SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ${item.kode_barang} FOR UPDATE`);
-                const stokSebelum = stockResult[0]?.[0]?.stock ? Number(stockResult[0][0].stock) : 0;
+                const [stockResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`, [item.kode_barang]);
+                const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
                 if (stokSebelum < item.jumlah) {
                     throw new Error(`Stock tidak cukup untuk ${item.kode_barang}. Stock tersedia: ${stokSebelum}, dibutuhkan: ${item.jumlah}`);
                 }
                 const sisaStok = stokSebelum - item.jumlah;
-                // Update stock with WHERE condition to ensure atomic operation
-                const updateResult = await tx.execute((0, drizzle_orm_1.sql) `UPDATE ventra_produk_detail SET stock = ${sisaStok} WHERE Kode_Brg = ${item.kode_barang} AND stock >= ${item.jumlah}`);
+                // Update stock with WHERE condition to ensure atomic operation and prevent double update
+                const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = ? WHERE Kode_Brg = ? AND stock = ?`, [sisaStok, item.kode_barang, stokSebelum]);
                 // Check if update was successful (affectedRows > 0)
-                if (!updateResult || (updateResult[0]?.affectedRows ?? 0) === 0) {
-                    throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`);
+                if (!updateResult || updateResult.affectedRows === 0) {
+                    throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin sudah berubah oleh transaksi lain.`);
                 }
                 // Insert detail transaction
-                await tx.insert(schema_1.ventraDetailTransaksi).values({
-                    idTransaksi: String(nextId),
-                    kodeBarang: item.kode_barang,
-                    jumlah: item.jumlah,
-                    harga: item.harga,
-                    totalHarga: item.total_harga,
-                    sisa: sisaStok,
-                });
+                await connection.query(`INSERT INTO ventra_detail_transaksi (id_transaksi, kode_barang, JMLH, harga, total_harga, sisa) VALUES (?, ?, ?, ?, ?, ?)`, [String(nextId), item.kode_barang, item.jumlah, item.harga, item.total_harga, sisaStok]);
             }
+            await connection.commit();
             return {
                 id: nextId
             };
-        });
+        }
+        catch (error) {
+            await connection.rollback();
+            throw error;
+        }
+        finally {
+            connection.release();
+        }
     },
     async deleteLatestTransaction() {
         return await drizzle_1.default.transaction(async (tx) => {
