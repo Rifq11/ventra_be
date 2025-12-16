@@ -154,6 +154,23 @@ export const TransactionsService = {
                     );
                 }
 
+                // Check if detail already exists to prevent duplicate processing
+                const existingDetail = await tx
+                    .select()
+                    .from(ventraDetailTransaksi)
+                    .where(
+                        and(
+                            eq(ventraDetailTransaksi.idTransaksi, String(nextId)),
+                            eq(ventraDetailTransaksi.kodeBarang, item.kode_barang)
+                        )
+                    )
+                    .limit(1);
+
+                if (existingDetail.length > 0) {
+                    // Skip if already processed (idempotency)
+                    continue;
+                }
+
                 // Use SELECT FOR UPDATE to lock row and prevent race condition
                 const stockResult = await tx.execute(
                     sql`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ${item.kode_barang} FOR UPDATE`
@@ -169,33 +186,27 @@ export const TransactionsService = {
 
                 const sisaStok = stokSebelum - item.jumlah;
 
-                await tx
-                    .update(ventraProdukDetail)
-                    .set({ stock: sisaStok })
-                    .where(eq(ventraProdukDetail.kodeBrg, item.kode_barang));
+                // Update stock with WHERE condition to ensure atomic operation
+                const updateResult = await tx.execute(
+                    sql`UPDATE ventra_produk_detail SET stock = ${sisaStok} WHERE Kode_Brg = ${item.kode_barang} AND stock >= ${item.jumlah}`
+                ) as any;
 
-                // Check if detail already exists to prevent duplicate insert
-                const existingDetail = await tx
-                    .select()
-                    .from(ventraDetailTransaksi)
-                    .where(
-                        and(
-                            eq(ventraDetailTransaksi.idTransaksi, String(nextId)),
-                            eq(ventraDetailTransaksi.kodeBarang, item.kode_barang)
-                        )
-                    )
-                    .limit(1);
-
-                if (existingDetail.length === 0) {
-                    await tx.insert(ventraDetailTransaksi).values({
-                        idTransaksi: String(nextId),
-                        kodeBarang: item.kode_barang,
-                        jumlah: item.jumlah,
-                        harga: item.harga,
-                        totalHarga: item.total_harga,
-                        sisa: sisaStok,
-                    });
+                // Check if update was successful (affectedRows > 0)
+                if (!updateResult || (updateResult[0]?.affectedRows ?? 0) === 0) {
+                    throw new Error(
+                        `Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`
+                    );
                 }
+
+                // Insert detail transaction
+                await tx.insert(ventraDetailTransaksi).values({
+                    idTransaksi: String(nextId),
+                    kodeBarang: item.kode_barang,
+                    jumlah: item.jumlah,
+                    harga: item.harga,
+                    totalHarga: item.total_harga,
+                    sisa: sisaStok,
+                });
             }
 
             return {
