@@ -95,28 +95,28 @@ exports.TransactionsService = {
         if (Number.isNaN(payload.total)) {
             throw new Error('Total must be numeric');
         }
-        // Use raw connection pool for better transaction control and SELECT FOR UPDATE
         const connection = await db_1.default.getConnection();
         try {
+            await connection.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
             await connection.beginTransaction();
+            console.log(`[TRANSACTION START] Total: ${payload.total}, Payment: ${payload.payment}, Kasir: ${payload.kasir}, Detail count: ${payload.detail.length}`);
             const uangDibayar = payload.uang_dibayar && !Number.isNaN(payload.uang_dibayar)
                 ? payload.uang_dibayar
                 : payload.total;
-            // Insert transaction using raw query
             const [insertResult] = await connection.query(`INSERT INTO ventra_transaksi (Total, Payment, Kasir, uang_dibayar, no_rek) VALUES (?, ?, ?, ?, ?)`, [payload.total, payload.payment, payload.kasir, uangDibayar, payload.no_rek || '']);
             const nextId = insertResult.insertId;
+            console.log(`[TRANSACTION ${nextId}] Created transaction with ID: ${nextId}`);
             for (const item of payload.detail) {
                 if (Number.isNaN(item.jumlah) ||
                     Number.isNaN(item.harga)) {
                     throw new Error(`Jumlah atau harga tidak valid pada item: ${item.kode_barang}`);
                 }
-                // Check if detail already exists to prevent duplicate processing
                 const [existingDetail] = await connection.query(`SELECT * FROM ventra_detail_transaksi WHERE id_transaksi = ? AND kode_barang = ?`, [String(nextId), item.kode_barang]);
+                console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Existing detail count = ${existingDetail.length}`);
                 if (existingDetail.length > 0) {
-                    // Skip if already processed (idempotency)
+                    console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: SKIPPED - Already exists`);
                     continue;
                 }
-                // Use SELECT FOR UPDATE to lock row and prevent race condition
                 const [stockResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`, [item.kode_barang]);
                 const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
                 console.log(`[DEBUG] ${item.kode_barang}: Stock sebelum = ${stokSebelum}, Jumlah = ${item.jumlah}`);
@@ -124,20 +124,17 @@ exports.TransactionsService = {
                     throw new Error(`Stock tidak cukup untuk ${item.kode_barang}. Stock tersedia: ${stokSebelum}, dibutuhkan: ${item.jumlah}`);
                 }
                 const sisaStok = stokSebelum - item.jumlah;
-                // Update stock using atomic operation: stock = stock - jumlah
-                // This ensures that even if multiple requests come, only one will succeed
                 const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = stock - ? WHERE Kode_Brg = ? AND stock >= ?`, [item.jumlah, item.kode_barang, item.jumlah]);
                 console.log(`[DEBUG] ${item.kode_barang}: Update affectedRows = ${updateResult?.affectedRows}, changedRows = ${updateResult?.changedRows}`);
-                // Check if update was successful (affectedRows > 0)
                 if (!updateResult || updateResult.affectedRows === 0) {
                     throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`);
                 }
-                // Verify the final stock after update
                 const [verifyResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ?`, [item.kode_barang]);
                 const stockSetelah = verifyResult[0]?.stock ? Number(verifyResult[0].stock) : 0;
                 console.log(`[DEBUG] ${item.kode_barang}: Stock setelah = ${stockSetelah}, Expected = ${sisaStok}`);
                 if (stockSetelah !== sisaStok) {
-                    console.error(`[ERROR] ${item.kode_barang}: Stock mismatch! Expected ${sisaStok}, got ${stockSetelah}`);
+                    console.error(`[ERROR TRANSACTION ${nextId}] ${item.kode_barang}: Stock mismatch! Expected ${sisaStok}, got ${stockSetelah}`);
+                    throw new Error(`Stock mismatch untuk ${item.kode_barang}. Expected ${sisaStok}, got ${stockSetelah}. Kemungkinan ada race condition atau double request.`);
                 }
                 // Insert detail transaction
                 await connection.query(`INSERT INTO ventra_detail_transaksi (id_transaksi, kode_barang, JMLH, harga, total_harga, sisa) VALUES (?, ?, ?, ?, ?, ?)`, [String(nextId), item.kode_barang, item.jumlah, item.harga, item.total_harga, sisaStok]);
@@ -149,6 +146,7 @@ exports.TransactionsService = {
         }
         catch (error) {
             await connection.rollback();
+            console.error(`[TRANSACTION ERROR] Rollback:`, error);
             throw error;
         }
         finally {
