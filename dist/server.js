@@ -4,9 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const app_1 = __importDefault(require("./app"));
-require("./config/db");
 const PORT = process.env.PORT || 3000;
 app_1.default.listen(PORT, () => {
-    console.log(`🚀 Ventra API running on port ${PORT}`);
-    console.log(`📍 http://localhost:${PORT}/ventra/api`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
