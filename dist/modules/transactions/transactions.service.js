@@ -117,27 +117,32 @@ exports.TransactionsService = {
                     console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: SKIPPED - Already exists`);
                     continue;
                 }
-                const [stockResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`, [item.kode_barang]);
-                const stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
-                console.log(`[DEBUG] ${item.kode_barang}: Stock sebelum = ${stokSebelum}, Jumlah = ${item.jumlah}`);
+                // Ambil stock dari detail transaksi terakhir (field sisa) sebagai source of truth
+                // Jika tidak ada, ambil dari ventra_produk_detail
+                const [lastDetailResult] = await connection.query(`SELECT sisa FROM ventra_detail_transaksi WHERE kode_barang = ? ORDER BY ID DESC LIMIT 1 FOR UPDATE`, [item.kode_barang]);
+                let stokSebelum;
+                if (lastDetailResult && lastDetailResult.length > 0 && lastDetailResult[0].sisa !== null) {
+                    // Gunakan sisa dari detail transaksi terakhir
+                    stokSebelum = Number(lastDetailResult[0].sisa);
+                    console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Stock dari detail transaksi terakhir (sisa) = ${stokSebelum}`);
+                }
+                else {
+                    // Jika belum ada transaksi sebelumnya, ambil dari ventra_produk_detail
+                    const [stockResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ? FOR UPDATE`, [item.kode_barang]);
+                    stokSebelum = stockResult[0]?.stock ? Number(stockResult[0].stock) : 0;
+                    console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Stock dari ventra_produk_detail = ${stokSebelum}`);
+                }
+                console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Stock sebelum = ${stokSebelum}, Jumlah = ${item.jumlah}`);
                 if (stokSebelum < item.jumlah) {
                     throw new Error(`Stock tidak cukup untuk ${item.kode_barang}. Stock tersedia: ${stokSebelum}, dibutuhkan: ${item.jumlah}`);
                 }
                 const sisaStok = stokSebelum - item.jumlah;
-                const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = stock - ? WHERE Kode_Brg = ? AND stock >= ?`, [item.jumlah, item.kode_barang, item.jumlah]);
-                console.log(`[DEBUG] ${item.kode_barang}: Update affectedRows = ${updateResult?.affectedRows}, changedRows = ${updateResult?.changedRows}`);
-                if (!updateResult || updateResult.affectedRows === 0) {
-                    throw new Error(`Gagal update stock untuk ${item.kode_barang}. Stock mungkin tidak cukup atau sudah berubah.`);
-                }
-                const [verifyResult] = await connection.query(`SELECT stock FROM ventra_produk_detail WHERE Kode_Brg = ?`, [item.kode_barang]);
-                const stockSetelah = verifyResult[0]?.stock ? Number(verifyResult[0].stock) : 0;
-                console.log(`[DEBUG] ${item.kode_barang}: Stock setelah = ${stockSetelah}, Expected = ${sisaStok}`);
-                if (stockSetelah !== sisaStok) {
-                    console.error(`[ERROR TRANSACTION ${nextId}] ${item.kode_barang}: Stock mismatch! Expected ${sisaStok}, got ${stockSetelah}`);
-                    throw new Error(`Stock mismatch untuk ${item.kode_barang}. Expected ${sisaStok}, got ${stockSetelah}. Kemungkinan ada race condition atau double request.`);
-                }
-                // Insert detail transaction
+                // Insert detail transaction dengan sisa stock yang sudah dikurangi
                 await connection.query(`INSERT INTO ventra_detail_transaksi (id_transaksi, kode_barang, JMLH, harga, total_harga, sisa) VALUES (?, ?, ?, ?, ?, ?)`, [String(nextId), item.kode_barang, item.jumlah, item.harga, item.total_harga, sisaStok]);
+                console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Detail inserted dengan sisa = ${sisaStok}`);
+                // Update stock di ventra_produk_detail untuk sinkronisasi (bukan untuk perhitungan)
+                const [updateResult] = await connection.query(`UPDATE ventra_produk_detail SET stock = ? WHERE Kode_Brg = ?`, [sisaStok, item.kode_barang]);
+                console.log(`[TRANSACTION ${nextId}] ${item.kode_barang}: Updated ventra_produk_detail.stock = ${sisaStok}, affectedRows = ${updateResult?.affectedRows}`);
             }
             await connection.commit();
             return {
